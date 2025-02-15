@@ -173,26 +173,34 @@ int MQTT_Init(void)
     int error = 0;
     char str[32] = {0};
     HAL_UART_Receive_IT(UART_SIM800, &rx_data, 1);
-
+    printf("Initializing MQTT...\r\n");
     SIM800_SendCommand("AT\r\n", "OK\r\n", CMD_DELAY);
+    printf("AT Command Sent: Checking Module Response\r\n");
     SIM800_SendCommand("ATE0\r\n", "OK\r\n", CMD_DELAY);
+    printf("Echo Disabled\r\n");
     error += SIM800_SendCommand("AT+CIPSHUT\r\n", "SHUT OK\r\n", CMD_DELAY);
+    printf("Shutting Down Previous Connections... %s\r\n", (error == 0) ? "Success" : "Failed");
     error += SIM800_SendCommand("AT+CGATT=1\r\n", "OK\r\n", CMD_DELAY);
+    printf("GPRS Attach... %s\r\n", (error == 0) ? "Success" : "Failed");
     error += SIM800_SendCommand("AT+CIPMODE=1\r\n", "OK\r\n", CMD_DELAY);
-
+    printf("Setting TCP/IP Mode... %s\r\n", (error == 0) ? "Success" : "Failed");
     snprintf(str, sizeof(str), "AT+CSTT=\"%s\",\"%s\",\"%s\"\r\n", SIM800.sim.apn, SIM800.sim.apn_user,
              SIM800.sim.apn_pass);
     error += SIM800_SendCommand(str, "OK\r\n", CMD_DELAY);
-
+    printf("Setting APN: %s... %s\r\n", SIM800.sim.apn, (error == 0) ? "Success" : "Failed");
     error += SIM800_SendCommand("AT+CIICR\r\n", "OK\r\n", CMD_DELAY);
+    printf("Bringing Up Wireless Connection... %s\r\n", (error == 0) ? "Success" : "Failed");
     SIM800_SendCommand("AT+CIFSR\r\n", "", CMD_DELAY);
+    printf("Retrieving IP Address...\r\n");
     if (error == 0)
     {
+    	printf("MQTT Initialization Successful. Connecting to Broker...\r\n");
         MQTT_Connect();
         return error;
     }
     else
     {
+    	printf("MQTT Initialization Failed! Error Code: %d\r\n", error);
         return error;
     }
 }
@@ -208,8 +216,16 @@ void MQTT_Connect(void)
     SIM800.mqttServer.connect = 0;
     char str[128] = {0};
     unsigned char buf[128] = {0};
+    printf("MQTT Connection Starting...\r\n");
     sprintf(str, "AT+CIPSTART=\"TCP\",\"%s\",%d\r\n", SIM800.mqttServer.host, SIM800.mqttServer.port);
-    SIM800_SendCommand(str, "OK\r\n", CMD_DELAY);
+    printf("Sending: %s\r\n", str);
+    if (SIM800_SendCommand(str, "OK\r\n", CMD_DELAY) != 0)
+	{
+		printf("ERROR: TCP Connection Failed!\r\n");
+		return;
+	}
+
+	printf("TCP Connection Established!\r\n");
 #if FREERTOS == 1
     osDelay(5000);
 #else
@@ -217,14 +233,22 @@ void MQTT_Connect(void)
 #endif
     if (SIM800.mqttServer.connect == 1)
     {
+    	printf("SIM800 Connected to MQTT Broker!\r\n");
         MQTTPacket_connectData datas = MQTTPacket_connectData_initializer;
         datas.username.cstring = SIM800.mqttClient.username;
         datas.password.cstring = SIM800.mqttClient.pass;
         datas.clientID.cstring = SIM800.mqttClient.clientID;
         datas.keepAliveInterval = SIM800.mqttClient.keepAliveInterval;
         datas.cleansession = 1;
+
+        printf("MQTT Client ID: %s\r\n", datas.clientID.cstring);
+		printf("MQTT Username: %s\r\n", datas.username.cstring);
+		printf("MQTT Password: %s\r\n", datas.password.cstring);
+		printf("MQTT KeepAlive Interval: %d seconds\r\n", datas.keepAliveInterval);
+
         int mqtt_len = MQTTSerialize_connect(buf, sizeof(buf), &datas);
         HAL_UART_Transmit_IT(UART_SIM800, buf, mqtt_len);
+
 #if FREERTOS == 1
         osDelay(5000);
 #else

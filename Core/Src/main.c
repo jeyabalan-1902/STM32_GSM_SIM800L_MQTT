@@ -70,6 +70,9 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef * huart)
         if (SIM800.mqttServer.connect == 1 && rx_data == 0xD0) {
             printf("Received MQTT PINGRESP\n\r");
             mqtt_receive = 1;
+            clearRxBuffer();
+            clearMqttBuffer();
+            MQTT_Sub("STM32/subscribe");
         }
     }
 }
@@ -116,7 +119,7 @@ int main(void)
 //  HAL_Delay(3000);
 //  HAL_GPIO_WritePin(SIM_PWR_GPIO_Port, SIM_PWR_Pin, GPIO_PIN_SET);
 //  HAL_Delay(10000);
-
+  printf("system Init\n\r");
 
   SIM800.sim.apn = "internet";
   SIM800.sim.apn_user = "";
@@ -142,7 +145,7 @@ int main(void)
 		   sub = 0;
 		   lastKeepAliveTime = millis();
 	   }
-	   if (SIM800.mqttServer.connect == 1)
+	  else
 	   {
 		   if(sub == 0){
 			   MQTT_Sub("STM32/subscribe");
@@ -170,14 +173,15 @@ int main(void)
 				   MQTT_Pub("STM32/publish", "LED Toggled");
 
 			   }
-//			   unsigned char *topic = SIM800.mqttReceive.topic;
-//			   int payload = atoi(SIM800.mqttReceive.payload);
-			  /// printf("%s", payload);
 			   SIM800.mqttReceive.newEvent = 0;
 		   }
-		   if ((millis() - lastKeepAliveTime) >= (KEEP_ALIVE_INTERVAL * 100)) {
-			   MQTT_PubUint8("STM32/pingreq", pub_uint8);
+		   if ((millis() - lastKeepAliveTime) >= (KEEP_ALIVE_INTERVAL * 500)) {
+			   uint8_t pingreq_packet[2] = {0xC0, 0x00};  // MQTT PINGREQ
+			   HAL_UART_Transmit(UART_SIM800, pingreq_packet, 2, 100);
 			   printf("Sending MQTT PINGREQ\n\r");
+//			   MQTT_PubUint8("STM32/pingreq", pub_uint8);
+//			   printf("Sending MQTT PINGREQ\n\r");
+
 			   lastKeepAliveTime = millis();
 		   }
 	   }
