@@ -248,6 +248,8 @@ void MQTT_Connect(void)
 
         int mqtt_len = MQTTSerialize_connect(buf, sizeof(buf), &datas);
         HAL_UART_Transmit_IT(UART_SIM800, buf, mqtt_len);
+        printf("==============================================================================\n\r");
+        printf("MQTT connection Established and ready to Transmit and Receive data!..\n\r");
 
 #if FREERTOS == 1
         osDelay(5000);
