@@ -18,6 +18,8 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "dma.h"
+#include "spi.h"
 #include "usart.h"
 #include "gpio.h"
 
@@ -55,9 +57,11 @@
 /* USER CODE BEGIN PV */
 TaskHandle_t mqttTaskHandle;
 TaskHandle_t gpioTaskHandle;
+TaskHandle_t callBackTaskHandle;
 SemaphoreHandle_t xButtonSemaphore;
 QueueHandle_t mqttQueue;
-QueueHandle_t rxCallbackQueue;
+QueueHandle_t GSM_rxCallbackQueue;
+QueueHandle_t ESP_uartQueue;
 
 
 volatile uint8_t buttonState = 0;
@@ -65,6 +69,8 @@ SIM800_t SIM800;
 uint32_t lastKeepAliveTime = 0;
 extern uint8_t mqtt_receive;
 extern uint8_t rx_data;
+
+uint8_t uartRxBuffer[1];
 
 typedef struct
 {
@@ -77,8 +83,10 @@ typedef struct
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 /* USER CODE BEGIN PFP */
-void MQTT_Task(void *pvParameters);
-void GPIO_Task(void *pvParameters);
+void GSM_MQTT_Task(void *pvParameters);
+void INT_GPIO_Task(void *pvParameters);
+void GSM_rxCallBack_Task(void *pvParameters);
+void ESP_UART_Task(void *pvParameters);
 uint32_t millis();
 /* USER CODE END PFP */
 
@@ -96,22 +104,35 @@ void GSM_init(void)
 	SIM800.mqttClient.clientID = "TestSub";
 	SIM800.mqttClient.keepAliveInterval = 60;
 }
+
 void FreeRTOS_Init(void)
 {
     mqttQueue = xQueueCreate(5, sizeof(uint8_t));
-    rxCallbackQueue = xQueueCreate(10, sizeof(SIM800.mqttReceive));
+    GSM_rxCallbackQueue = xQueueCreate(10, sizeof(SIM800.mqttReceive));
+    ESP_uartQueue = xQueueCreate(10, sizeof(uartRxBuffer));
     xButtonSemaphore = xSemaphoreCreateBinary();
 
-    xTaskCreate(MQTT_Task, "MQTT_Task", 512, NULL, 2, &mqttTaskHandle);
-    xTaskCreate(GPIO_Task, "GPIO_Task", 256, NULL, 2, &gpioTaskHandle);
-
-    vTaskStartScheduler();  // Start FreeRTOS scheduler
+    xTaskCreate(ESP_UART_Task, "ESP_UART_Task", 200, NULL, 3, NULL);
+    xTaskCreate(GSM_MQTT_Task, "GSM_MQTT_Task", 512, NULL, 2, &mqttTaskHandle);
+    xTaskCreate(INT_GPIO_Task, "INT_GPIO_Task", 256, NULL, 4, &gpioTaskHandle);
+    xTaskCreate(GSM_rxCallBack_Task, "GSM_CALLBACK_Task", 256, NULL, 1, &callBackTaskHandle);
+    vTaskStartScheduler();
 }
 
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef * huart)
 {
+	if (huart->Instance == UART4)
+	{
+		BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+		xQueueSendFromISR(ESP_uartQueue, uartRxBuffer, &xHigherPriorityTaskWoken);
+		memset(uartRxBuffer, 0, sizeof(uartRxBuffer));
+		HAL_UART_Receive_IT(&huart4, uartRxBuffer, sizeof(uartRxBuffer));
+		portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+	}
+
     if (huart == UART_SIM800)
     {
+    	BaseType_t xHigherPriorityTaskWoken = pdFALSE;
         Sim800_RxCallBack();
         if (SIM800.mqttServer.connect == 1 && rx_data == 0xD0) {
             printf("Received MQTT PINGRESP\n\r");
@@ -122,24 +143,40 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef * huart)
         }
         if (SIM800.mqttReceive.newEvent)
 		{
+        	printf("new data received from MQTT\n\r");
         	SIM800_MQTT_Receive_t receivedData;
 			strncpy(receivedData.topic, (char *)SIM800.mqttReceive.topic, sizeof(receivedData.topic) - 1);
 			strncpy(receivedData.payload, (char *)SIM800.mqttReceive.payload, sizeof(receivedData.payload) - 1);
 			receivedData.newEvent = 1;
 
 
-			xQueueSendFromISR(rxCallbackQueue, &receivedData, NULL);
+			xQueueSendFromISR(GSM_rxCallbackQueue, &receivedData, NULL);
 			SIM800.mqttReceive.newEvent = 0;
 		}
+        portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
     }
 }
 
-void rxCallBack_Task(void *pvParameters)
+void ESP_UART_Task(void *param)
+{
+    while (1) {
+        if (xQueueReceive(ESP_uartQueue, uartRxBuffer, portMAX_DELAY) == pdTRUE) {
+            printf("UART Data Received: %s\n", uartRxBuffer);
+            if(uartRxBuffer == 1)
+            {
+            	printf("LED Toggled\n\r");
+            	HAL_GPIO_TogglePin(LED_GPIO_Port, LED_Pin);
+            }
+        }
+    }
+}
+
+void GSM_rxCallBack_Task(void *pvParameters)
 {
 	SIM800_MQTT_Receive_t receivedData;
 	while(1)
 	{
-		if(xQueueReceive(rxCallbackQueue, &receivedData, portMAX_DELAY) == pdTRUE)
+		if(xQueueReceive(GSM_rxCallbackQueue, &receivedData, portMAX_DELAY) == pdTRUE)
 		{
 			printf("data received from mqtt Receiver call back\n\r");
 			printf("Topic: %s\n\r", receivedData.topic);
@@ -158,12 +195,13 @@ void rxCallBack_Task(void *pvParameters)
 	}
 }
 
-void GPIO_Task(void *pvParameters)
+void INT_GPIO_Task(void *pvParameters)
 {
     while (1)
     {
     	if(xSemaphoreTake(xButtonSemaphore, portMAX_DELAY) == pdTRUE)
     	{
+    		HAL_GPIO_TogglePin(LED_GPIO_Port, LED_Pin);
     		buttonState ^= 1;
 			printf("button state toggled: %d\n\r", buttonState);
 			xQueueSend(mqttQueue, (void *)&buttonState, portMAX_DELAY);
@@ -171,7 +209,7 @@ void GPIO_Task(void *pvParameters)
     }
 }
 
-void MQTT_Task(void *pvParameters)
+void GSM_MQTT_Task(void *pvParameters)
 {
    uint8_t receivedState;
    char mqttPayload[32];
@@ -258,13 +296,18 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+  MX_DMA_Init();
   MX_USART2_UART_Init();
   MX_USART3_UART_Init();
+  MX_SPI1_Init();
+  MX_UART4_Init();
   /* USER CODE BEGIN 2 */
 //  HAL_GPIO_WritePin(SIM_PWR_GPIO_Port, SIM_PWR_Pin, GPIO_PIN_RESET);
 //  HAL_Delay(3000);
 //  HAL_GPIO_WritePin(SIM_PWR_GPIO_Port, SIM_PWR_Pin, GPIO_PIN_SET);
 //  HAL_Delay(10000);
+  HAL_UART_Receive_IT(&huart4, uartRxBuffer, sizeof(uartRxBuffer));
+  HAL_UART_Receive_IT(UART_SIM800, &rx_data, 1);
   printf("system Init\n\r");
   GSM_init();
   FreeRTOS_Init();
@@ -280,7 +323,7 @@ int main(void)
 //	  {
 //		   MQTT_Init();
 //		   sub = 0;
-//		   lastKeepAliveTime = millis();
+//		   lastKeepAliveTime = millis();(Click Lock symbol to allow editing and add documentation here)
 //	   }
 //	  else
 //	   {
