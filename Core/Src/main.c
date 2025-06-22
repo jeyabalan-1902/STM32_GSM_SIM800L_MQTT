@@ -103,11 +103,11 @@ void GSM_init(void)                                 //GSM Init
 	SIM800.sim.apn = "internet";
 	SIM800.sim.apn_user = "";
 	SIM800.sim.apn_pass = "";
-	SIM800.mqttServer.host = "mqtt.onwords.in";
+	SIM800.mqttServer.host = "";
 	SIM800.mqttServer.port = 1883;
-	SIM800.mqttClient.username = "Nikhil";
-	SIM800.mqttClient.pass = "Nikhil8182";
-	SIM800.mqttClient.clientID = "TestSub";
+	SIM800.mqttClient.username = "";
+	SIM800.mqttClient.pass = "";
+	SIM800.mqttClient.clientID = "simTest";
 	SIM800.mqttClient.keepAliveInterval = 60;
 }
 
